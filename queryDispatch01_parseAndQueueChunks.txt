@@ -23,7 +23,6 @@ activate czar
         uqf -> sp ++ : getSelectStmt()
             sp -> SelectStmt ** : new
                 return selectStmt
-            return selectStmt
         uqf -> QuerySession ++ : analyzeQuery(query, selectStmt)
             QuerySession -> QuerySession : _original = query\l_stmt=selectStmt\l_isFinal=false
             QuerySession -> QuerySession ++ : initContext()
@@ -44,11 +43,9 @@ activate czar
                         end note
                     return mergeSelectStmt
                 return
-
             return
         uqf -> uqs ** : new
-        return
-
+        return userQuerySelect
     czar -> finalThread ** : new
     czar -> finalThread ++ :  detach
         return
@@ -57,13 +54,41 @@ activate czar
     activate finalThread #005500
         czar -> uqs ++ #005500 : submit()
 
-            uqs -> qs ++ #005500 : _finalize()
+            uqs -> QuerySession ++ #005500 : _finalize()
                 return
             uqs -> uqs ++ #005500 : _setupMerger()
-                uqs -> InfileMergerConfig : targetTable = _resultTable
-                uqs -> QuerySession ++ #005500 : getMergeStmt()
-                    return mergeStmt
-                uqs -> InfileMergerConfig : mergeStmt = mergeStmt
+                note over uqs
+                    can we get the schema and
+                    create the table right here?
+                    end note
+                alt proposal
+                    uqs -> uqs ++ #005500 : _createResultsTable()
+                        note over uqs
+                            TODO define what this would take.
+                            Idea:
+                            1. get select statement
+                            2. execute query on empty table (will it provde schmea?)
+                               maybe I can steal this code from the worker
+                            3. pull column info
+                            4. create table using column info
+                            end note
+                        return
+                    uqs -> InfileMergerConfig ++ #005500 : targetTable = the new table name
+                        return
+                    note over uqs
+                        I guess the merge statement will still have to be
+                        provided as well? Including it here for now at least:
+                        end note
+                    uqs -> QuerySession ++ #005500 : getMergeStmt()
+                        return mergeStmt
+                    uqs -> InfileMergerConfig ++ #005500 : mergeStmt = mergeStmt
+                        return
+                else current
+                    uqs -> InfileMergerConfig : targetTable = _resultTable
+                    uqs -> QuerySession ++ #005500 : getMergeStmt()
+                        return mergeStmt
+                    uqs -> InfileMergerConfig : mergeStmt = mergeStmt
+                    end
                 return
 
             loop for chunk in chunks
