@@ -1,0 +1,92 @@
+@startuml
+
+title Query Dispatch 02: Build JobQuery and Send
+
+participant EventThread as et
+participant CommandQueue as cq
+participant PriorityCommand as pc
+participant UserQuerySelect as uqs
+participant Executive as exe
+participant MarkCompleteFunc as mcf
+participant QueryRequest as qr
+participant XrdSsiResource as ssir
+participant XrdSsiService as ssis
+participant JobQuery as jq
+participant JobStatus as js
+participant JobDescription as jd
+participant TaskMessageFactory as tmf
+participant TaskMessage as tm
+participant MergingHandler as mh
+participant InfileMerger as im
+
+
+activate et
+et -> cq ++ : getCmd()
+    return cmd
+et -> pc ++ : runAction(this)
+    pc -> pc ++ : action(...)
+        pc -> pc ++ : _func(...)
+            pc -> uqs ++ : funcBuildJob(...)
+            uqs -> mh ** : make_shared(...)
+            uqs -> jd ** : create(...)
+            uqs -> exe ++ : add(jobDescription)
+                exe -> js ** : make_shared()
+                exe -> mcf ** : make_shared(...)
+                exe -> jq ** : create(this, jobDescription, jobStatus, markCompleteFunc, _id)
+                exe -> exe ++ : _track(id, jobQuery)
+                    exe -> exe : _incompleteJobs[id] = jobQuery
+                    return
+                exe -> jq ++ : runJob()
+                    jq -> mh ++ : reset()
+                        mh -> mh ++ : _initState()
+                            return
+                        return
+                    jq -> jd ++ : incrAttemptCountScrubResults()
+                        jd -> mh ++ : prepScrubResults(jobId, ...)
+                            mh -> im ++ : prepScrub(jobId, ...)
+                                return
+                            jd -> jd ++ : buildPayload()
+                                jd -> tmf ++ : serializeMsg(...)
+                                    note over tmf
+                                        chunk query spec
+                                        chunk result name
+                                        query id
+                                        job id
+                                        attempt count
+                                        os
+                                        end note
+                                    tmf -> tmf ++ : _makeMsg(...)
+                                        tmf -> tm ** : make_shared()
+                                        tmf -> tm ++ : (populate using input vars)
+                                            return
+                                        tmf -> tm ++ : SerializeToOstream(out os)
+                                            return os
+                                        return os
+                                    return os
+                                jd -> jd : _payloads[attemptCount] = os.str()
+                                return
+                            return
+                        return
+                    jq -> exe ++ : startQuery(this)
+                        exe -> ssir ** : ctor(...)
+                            activate ssir
+                            ssir --> exe : jobResource
+                            deactivate ssir
+                        exe -> qr ** : create(jobQuery)
+                        exe -> jq ++ : setQueryRequest(queryRequest)
+
+                            return
+                        exe -> ssis ++ : ProcessRequest(queryRequest, jobResource)
+                        return
+                    jq -> js ++ : updateInfo(id string, JobStatus::REQUEST)
+                        return
+                    return
+                return jobQuery
+            return
+        return
+    return
+return
+deactivate et
+
+@enduml
+

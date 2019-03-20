@@ -1,0 +1,104 @@
+@startuml
+
+title Query Dispatch 01: Parse and Queue Chunks
+
+participant Czar as czar
+participant UserQueryFactory as uqf
+participant SelectParser as sp
+participant Executive as exe
+participant QuerySession
+participant UserQuerySelect as uqs
+participant InfileMergerConfig
+participant JobDescription as jd
+participant JobQuery as jq
+participant PriorityCommand as pc
+participant QdispPool as qdp
+participant PriorityQueue as pq
+
+
+[-> czar : submitQuery
+activate czar
+
+    czar -> uqf ++ : newUserQuery
+        uqf -> sp ++ : getSelectStmt()
+            sp -> SelectStmt ** : new
+                return selectStmt
+            return selectStmt
+        uqf -> QuerySession ++ : analyzeQuery(query, selectStmt)
+            QuerySession -> QuerySession : _original = query\l_stmt=selectStmt\l_isFinal=false
+            QuerySession -> QuerySession ++ : initContext()
+                return
+            QuerySession -> QuerySession ++ : _applyLogicPlugins()
+                QuerySession -> TablePlugin ++ : applyLogical(stmt, queryContext)
+                    note over TablePlugin
+                        This seems to be where the IR
+                        is modified with 'QST_<num>' table names.
+                        end note
+                    return
+                return
+            QuerySession -> QuerySession ++ : _generateConcrete()
+                QuerySession -> SelectStmt ++ : copyMerge()
+                    note over SelectStmt
+                        copies selectStmt, orderBy,
+                        groupBy, and having.
+                        end note
+                    return mergeSelectStmt
+                return
+
+            return
+        uqf -> uqs ** : new
+        return
+
+    czar -> finalThread ** : new
+    czar -> finalThread ++ :  detach
+        return
+
+    finalThread -> czar ++ #005500 : finalizer
+    activate finalThread #005500
+        czar -> uqs ++ #005500 : submit()
+
+            uqs -> qs ++ #005500 : _finalize()
+                return
+            uqs -> uqs ++ #005500 : _setupMerger()
+                uqs -> InfileMergerConfig : targetTable = _resultTable
+                uqs -> QuerySession ++ #005500 : getMergeStmt()
+                    return mergeStmt
+                uqs -> InfileMergerConfig : mergeStmt = mergeStmt
+                return
+
+            loop for chunk in chunks
+                note over exe, uqs
+                    queue a command for each chunk
+                    end note
+                uqs -> pc ** #005500 : make_shared(funcBuildJob)
+                    activate pc #005500
+                    pc -> uqs : cmd
+                    deactivate pc
+                uqs -> exe ++ #005500 : queueJobStart(cmd, ...)
+                    exe -> exe ++ #005500 : _jobStartCmdList.push_back(cmd)
+                        return
+                    exe -> qdp ++ #005500 : queCmd(cmd, ...)
+                        qdp -> pq ++ #005500 : queCmd(cmd, ...)
+                            note over pq
+                                uses impl
+                                in CommandQueue
+                                end note
+                            return
+                        return
+                    return
+                end
+            return
+        return
+        czar -> uqs ++ #005500 : join()
+            uqs -> exe ++ #005500 : join()
+                exe -> exe ++ #005500 : _waitAllUntilEmpty()
+                    return
+                return bool (is empty)
+        return
+    deactivate finalThread
+
+[<- czar : (done)
+deactivate czar
+
+@enduml
+

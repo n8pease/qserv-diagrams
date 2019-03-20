@@ -1,0 +1,193 @@
+@startuml
+
+
+/''' Czar '''/
+Czar *-- UserQueryFactory
+Czar *-- QdispPool
+Czar *-- "0..n" UserQuerySelect
+
+
+/''' UserQueryFactory '''/
+UserQueryFactory *-- Executive::Config
+UserQueryFactory *-- QMetaSelect
+UserQueryFactory *-- SecondaryIndex
+UserQueryFactory *-- QMeta
+UserQueryFactory *-- CssAccess
+class UserQueryFactory {
+MySqlConfig
+qmeta::CzarId
+}
+
+
+/''' Executive::Config '''/
+class Executive::Config {
+string serviceUrl // e.g. localhost:1094
+string getMockStr()
+}
+
+
+/''' UserQuerySelect '''/
+UserQuerySelect *-- SecondaryIndex
+UserQuerySelect *-- QMeta
+UserQuerySelect *-- InfileMergerConfig
+UserQuerySelect *-- InfileMerger
+UserQuerySelect *-- QuerySession
+UserQuerySelect *-- MessageStore
+UserQuerySelect *-- Executive
+
+
+UserQueryFactory ..> "Creates" UserQuerySelect
+
+
+/''' QuerySession '''/
+QuerySession *-- CssAccess
+QuerySession *-- "analysis\ncontext" QueryContext
+QuerySession *-- "logical\lquery\lstatement" SelectStmt
+QuerySession *-- "for getting\lschema info" MySqlConfig
+class QuerySession {
+    - string defaultDb
+    - string original // original user query
+    - QueryContext _context
+    - SelectStmt _stmt
+    - MySqlConfig _mysqlSchemaConfig
+}
+
+
+/''' Executive '''/
+Executive *-- MessageStore
+Executive *-- "0..n" JobQuery
+Executive *-- XrdSsiService
+Executive *-- QdispPool
+Executive *-- "_jobStartCmdList" PriorityCommand
+class Executive {
+void markCompleted(int jobId, bool success)
+JobMap _incompleteJobs
+}
+
+
+/''' JobQuery '''/
+JobQuery o-- Executive
+JobQuery *-- JobDescription
+JobQuery *-- MarkCompleteFunc
+JobQuery *-- JobStatus
+JobQuery *-- InstanceCount
+JobQuery *-- QueryRequest
+JobQuery *-- QdispPool
+class JobQuery {
+    # uint64_t query_id
+    # string id_string
+    # recursive_mutex /' protects _jobDescription, _queryRequestPtr, and _inSsi '/
+    # bool _inSsi
+    # bool _cancelled
+}
+
+
+
+
+/''' QueryRequest '''/
+XrdSsiRequest <|-- QueryRequest
+QueryRequest *-- QdispPool
+QueryRequest *-- AskForResponseDataCmd
+QueryRequest *-- "keepAlive" QueryRequest
+QueryRequest *-- JobQuery
+class QueryRequest {
+    - bool _largeResult
+    - atomic bool _finishCalled
+    - util::InstanceCount
+    - string job id string
+    - bool canceled
+    - mutex finishStatusMutex
+    - atomic bool calledMarkComplete
+    - atomic bool retired
+    - HoldState holdState
+}
+
+
+/''' JobDescription '''/
+JobDescription *-- MergingHandler
+JobDescription *-- TaskMsgFactory
+JobDescription *-- ChunkQuerySpec
+class JobDescription {
+    - uint64_t _queryId
+    - int _jobId
+    - map<int, string> _payloads
+    - string _qIdStr
+    - string _chunkResultName
+}
+
+
+/''' AskForResponseDataCmd '''/
+AskForResponseDataCmd o-- QueryRequest
+AskForResponseDataCmd o-- JobQuery
+class AskForResponseDataCmd {
+    - string id string
+    - mutex mtx
+    - condition_variable cv
+    - State (one of STARTED, DATAREADY1, DONE2)
+    - int blen
+    - bool last
+}
+
+
+
+/''' MergingHandler '''/
+ResponseHandler <|-- MergingHandler
+MergingHandler *-- ChunkMsgReceiver
+MergingHandler *-- MergeBuffer
+MergingHandler *-- WorkerResponse
+MergingHandler *-- InfileMerger
+class MergingHandler {
+    - string table_name
+    - MsgState state
+    - bool flushed
+    - string worker_name
+    - error description
+}
+
+
+/''' InfileMerger '''/
+InfileMerger *-- mysql::MySqlConnection
+InfileMerger *-- sql::SqlConnection
+InfileMerger *-- InfileMergerConfig
+InfileMerger *-- InfileMergeError
+class InfileMerger {
+    - string _mergeTable
+    - bool _isFinished
+    - bool _needCreateTable
+}
+
+
+/''' InfileMergerConfig '''/
+class InfileMergerConfig {
+    + mysql::MySqlConfig const mySqlConfig;
+    + string targetTable;
+    + shared_ptr<query::SelectStmt> mergeStmt;
+}
+
+
+/''' MergeBuffer '''/
+MergeBuffer *-- bufType
+
+
+/''' WorkerResponse '''/
+WorkerResponse *-- Result
+WorkerResponse *-- ProtoHeader
+WorkerResponse ..> "uses" bufType
+class WorkerResponse {
+    + unsigned char headerSize
+}
+
+
+/''' Result '''/
+protobuf::message <|-- Result
+
+
+/''' ProtoHeader '''/
+protobuf::message <|-- ProtoHeader
+
+
+
+UserQuerySelect ..> "Creates" ChunkMsgReceiver
+
+
+@enduml

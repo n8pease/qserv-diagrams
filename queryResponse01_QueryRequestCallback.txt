@@ -1,0 +1,113 @@
+@startuml
+
+title Query Response 01: QueryRequest Callback
+
+participant EventThread
+participant XrdSsiService
+participant QueryRequest
+participant MergingHandler
+participant InfileMerger
+participant "sql module" as sql
+participant WorkerResponse
+participant JobStatus
+participant AskForResponseDataCmd
+participant condition_variable
+participant QdispPool
+
+[-> XrdSsiService : (xrd thread)
+activate XrdSsiService
+    XrdSsiService -> QueryRequest ++ : ProcessResponse(...)
+        QueryRequest -> JobStatus ++ : updateInfo(job id str, JobStatus::RESPONSE_READY)
+            return
+        QueryRequest -> QueryRequest ++ : _importStream(JobQuery::Ptr)
+            QueryRequest -> AskForResponseDataCmd ** : make_shared(this, jobQuery)
+            QueryRequest -> QueryRequest ++ : _queueAskForResponse(_askForResponseDataCmd, jobQuery)
+                QueryRequest -> QdispPool ++ : queCmd(askForResponseDataCmd, magic priority number)
+                    return
+                return
+            return
+        return
+    [<- XrdSsiService :
+    deactivate XrdSsiService
+
+EventThread -> AskForResponseDataCmd ++ #000055 : runAction(data)
+    AskForResponseDataCmd -> AskForResponseDataCmd ++ #000055 : action(data)
+        AskForResponseDataCmd -> QueryRequest ++ #000055 : GetResponseData(buffer, buffer size)
+            return
+        AskForResponseDataCmd -> condition_variable ++ #000055 : wait {return _state != State::STARTED0;}
+            note over AskForResponseDataCmd, condition_variable
+                wait for XrdSsi to call ProcessResponseData
+                which updates state and then we know there
+                is data in the buffer to read.
+                end note
+            note over condition_variable
+                !does not handle
+                spurious wakeups!
+                end note
+
+            /''' Begin Thread #005500 '''/
+            [-> QueryRequest : ProcessResponseData (xrd thread)
+            activate QueryRequest #005500
+                QueryRequest -> JobStatus ++ #005500 : updateInfo(job id string, JobStatus::RESPONSE_DATA)
+                    JobStatus -> JobStatus : _state = RESPONSE_DATA
+                    return
+                QueryRequest -> AskForResponseDataCmd ++ #005500 : notifyDataSuccess(len, is/not last)
+                    AskForResponseDataCmd -> AskForResponseDataCmd : set _blen, _last, state = DATAREADY1
+                    AskForResponseDataCmd -> condition_variable ++ #005500 : notify_all
+                        return
+                    return
+                [<-- QueryRequest  :
+                deactivate QueryRequest
+                /''' End Thread #005500 '''/
+
+            condition_variable --> AskForResponseDataCmd -- :
+        AskForResponseDataCmd -> QueryRequest ++ #000055 : processData(jobQuery, len, is/not last)
+            QueryRequest -> AskForResponseDataCmd ++ #000055 : reset()
+                note over QueryRequest
+                    so, we're called by the AskFor...
+                    and we reset our pointer to it.
+                    I guess the caller owns a copy of
+                    the ptr? This is kinda FUBAR.
+                    end note
+                return
+            QueryRequest -> MergingHandler ++ #000055 : flush(len, is/not last, ...)
+                MergingHandler -> MergingHandler ++ #000055 : _merge()
+                    MergingHandler -> InfileMerger ++ #000055 : merge(_response)
+                        alt if _needCreateTable
+                            InfileMerger -> InfileMerger ++ #000055 : _setupTable(repsonse)
+                                InfileMerger -> sql ++ #000055 : formCreateTable(table name, schema)
+                                    return createStatement string
+                                InfileMerger -> InfileMerger ++ #000055 : _applyMysqlLocal(createStatement)
+                                    note over InfileMerger
+                                        This is where the query is sent
+                                        to create the merge table.
+                                        end note
+                                    return true
+                                return true
+                            end
+                        note over InfileMerger
+                            todo look inside here for
+                            how the merge gets handled
+                            end note
+                        return success=true
+                    MergingHandler -> WorkerResponse ++ #000055 : reset pointer
+                        return success=true
+                    destroy WorkerResponse
+                    return
+                return
+            return
+
+
+
+
+            note over AskForResponseDataCmd
+                Stopped here. TODO/NEXT
+                Keep pulling yarn and
+                see how and where the data
+                gets staged back in the czar.
+                end note
+
+        AskForResponseDataCmd --> AskForResponseDataCmd -- :
+    AskForResponseDataCmd --> EventThread -- :
+
+@enduml
